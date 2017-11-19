@@ -53,8 +53,7 @@ def get_credentials():
 # Define a function to get a list of all the photos in the 'Google Photos IphoneSE' folder.
 def getAllPhotos(apiService):
     # Get the folder ID of the 'Google Photos IphoneSE' folder.
-    googlePhotosFolder = [item for item in (apiService.files().list(
-            pageSize = 100, q = "'root' in parents").execute()['files']) if item['name'] == 'Google Photos IphoneSE']
+    googlePhotosFolder = [item for item in getChildren('root', apiService) if ((item['name'] == 'Google Photos IphoneSE') & (item['trashed'] == False))]
     googlePhotosFolderId = googlePhotosFolder[0]['id']
     allPhotos = []
     page_token = None
@@ -67,11 +66,11 @@ def getAllPhotos(apiService):
             if page_token:
                 param['pageToken'] = page_token
             param['q'] = "'%s' in parents" % googlePhotosFolderId
-            param['fields'] = "nextPageToken, files(id, name, createdTime)"
+            param['fields'] = "nextPageToken, files(id, name, createdTime, trashed)"
             # Request a list of files from the Discovery service.
             files = apiService.files().list(**param).execute()
             # Add the page of files to the list.
-            allPhotos.extend(files['files'])
+            allPhotos.extend([curFile for curFile in files['files'] if curFile['trashed'] == False])
             page_token = files.get('nextPageToken')
             if not page_token:
                 break
@@ -80,6 +79,10 @@ def getAllPhotos(apiService):
             print('An error occurred: %s' % error)
             break
     return allPhotos
+
+# Define a helper function to get the children of an item.
+def getChildren(parentID, apiService):
+    return apiService.files().list(q = ("'" + parentID + "' in parents"), fields = 'files(id, name, createdTime, trashed)').execute()['files']
 
 # Define a function to create a folder on Google Drive.
 def createRemoteFolder(folderName, apiService, parentID = None):
@@ -103,32 +106,29 @@ def separatePhotosByMonth(allPhotos):
 # Define a function to copy the photos by creation date into their respective folders.
 def copyPhotosToFolders(apiService, allPhotosByMonth, photosFolderId):
     # Loop through each key in the allPhotosByMonth dictionary.
-    for key, value in allPhotosByMonth.iteritems():
-        if (key == '2007-09'):
-            # If the year folder does not exist, create it.
-            yearFolderId = [item['id'] for item in (apiService.files().list(
-                    q = ("'" + photosFolderId + "' in parents")).execute()['files']) if item['name'] == key[0:4]]
-            if (len(yearFolderId) > 0):
-                yearFolderId = yearFolderId[0]
-            else:
-                print('Creating folder: ' + key[0:4])
-                yearFolderId = createRemoteFolder(key[0:4], apiService, photosFolderId) 
-            # If the month folder does not exist, create it.
-            monthString = calendar.month_name[int(key[5:7])]
-            monthFolderId = [item['id'] for item in (apiService.files().list(
-                    q = ("'" + yearFolderId + "' in parents")).execute()['files']) if item['name'] == monthString]
-            if (len(monthFolderId) > 0):
-                monthFolderId = monthFolderId[0]
-            else:
-                print('Creating folder: ' + monthString)
-                monthFolderId = createRemoteFolder(monthString, apiService, yearFolderId) 
-            # Check if any photos in the current list need to be added to the list.
-            photosToAdd = [item for item in value if item not in (apiService.files().list(
-                    q = ("'" + monthFolderId + "' in parents")).execute()['files'])]
-            for photo in photosToAdd:
-                # Copy the photo to the appropriate month/year folder.
-                print('Adding photo: ' + photo['name'])
-                apiService.files().update(fileId = photo['id'], addParents = monthFolderId, fields = 'id, parents').execute()
+    for key, photoList in allPhotosByMonth.iteritems():
+        # If the year folder does not exist, create it.
+        yearFolderId = [item['id'] for item in getChildren(photosFolderId, apiService) if ((item['name'] == key[0:4]) & (item['trashed'] == False))]
+        if (len(yearFolderId) > 0):
+            yearFolderId = yearFolderId[0]
+        else:
+            print('Creating folder: ' + key[0:4])
+            yearFolderId = createRemoteFolder(key[0:4], apiService, photosFolderId) 
+        # If the month folder does not exist, create it.
+        monthString = calendar.month_name[int(key[5:7])]
+        print('Checking folder: ' + monthString + ' ' + key[0:4])
+        monthFolderId = [item['id'] for item in getChildren(yearFolderId, apiService) if ((item['name'] == monthString) & (item['trashed'] == False))]
+        if (len(monthFolderId) > 0):
+            monthFolderId = monthFolderId[0]
+        else:
+            print('Creating folder: ' + monthString)
+            monthFolderId = createRemoteFolder(monthString, apiService, yearFolderId) 
+        # Check if any photos in the current list need to be added to the list.
+        photosToAdd = [item for item in photoList if ((item not in getChildren(monthFolderId, apiService)) & (item['trashed'] == False))]
+        for photo in photosToAdd:
+            # "Copy" the photo to the appropriate month/year folder, by adding the folder to its 'parents' list.
+            print('Adding photo: ' + photo['name'])
+            apiService.files().update(fileId = photo['id'], addParents = monthFolderId, fields = 'id, parents').execute()
                 
                     
 """Shows basic usage of the Google Drive API.
@@ -156,8 +156,7 @@ def main():
         print('Number of files: ' + str(len(allPhotos)))
     
     # Get the folder ID of the 'Photos' folder.
-    photosFolderId = [item for item in (service.files().list(pageSize = 50, q = "'root' in parents").execute()['files']) 
-                      if item['name'] == 'Photos'][0]['id']
+    photosFolderId = [item for item in getChildren('root', service) if ((item['name'] == 'Photos') & (item['trashed'] == False))][0]['id']
     # Separate the photos list by month into a dictionary.
     allPhotosByMonth = separatePhotosByMonth(allPhotos)
     # Copy photos to folders.
