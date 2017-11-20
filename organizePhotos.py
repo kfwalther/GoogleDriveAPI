@@ -82,7 +82,27 @@ def getAllPhotos(apiService):
 
 # Define a helper function to get the children of an item.
 def getChildren(parentID, apiService):
-    return apiService.files().list(q = ("'" + parentID + "' in parents"), fields = 'files(id, name, createdTime, trashed)').execute()['files']
+    children = []
+    page_token = None
+    # Loop through all pages of files, saving them in the children list.
+    while True:
+        try:
+            param = {}
+            if page_token:
+                param['pageToken'] = page_token
+            param['q'] = "'%s' in parents" % parentID
+            param['fields'] = "nextPageToken, files(id, name, createdTime, trashed)"
+            # Request a list of files from the Discovery service.
+            files = apiService.files().list(**param).execute()
+            # Add the page of files to the list.
+            children.extend([curFile for curFile in files['files']])
+            page_token = files.get('nextPageToken')
+            if not page_token:
+                break
+        except apiclient.errors.HttpError, error:
+            print('An error occurred: %s' % error)
+            break    
+    return children
 
 # Define a function to create a folder on Google Drive.
 def createRemoteFolder(folderName, apiService, parentID = None):
@@ -137,6 +157,7 @@ Creates a Google Drive API service object and outputs the names and IDs
 for up to 10 files.
 """
 def main():
+    print('Organizing photos...')
     credentials = get_credentials()
     http = credentials.authorize(httplib2.Http())
     # Create the Google Drive API Discovery service object, for interacting with the API.
@@ -149,9 +170,6 @@ def main():
     if not allPhotos:
         print('No files found.')
     else:
-#         print('Files:')
-#         for item in allPhotos:
-#             print('{0} ({1}) {2}'.format(item['name'], item['id'], item['createdTime']))
         print(allPhotos[0].keys())
         print('Number of files: ' + str(len(allPhotos)))
     
@@ -161,9 +179,7 @@ def main():
     allPhotosByMonth = separatePhotosByMonth(allPhotos)
     # Copy photos to folders.
     copyPhotosToFolders(service, allPhotosByMonth, photosFolderId)
-    
-#     newFolderId = createRemoteFolder('folder1', service, photosFolderId)
-    
+        
     
 # Define the main entry point to the program.
 if __name__ == '__main__':
